@@ -211,6 +211,30 @@ body { background: var(--bg); color: var(--text); font-family: 'SF Mono', 'Fira 
   padding: 4px 7px; border-radius: 5px; font-size: 11px; font-family: inherit;
 }
 .cp-hex-input:focus { outline: none; border-color: var(--accent); }
+.cp-eyedropper {
+  width: 28px; height: 28px; background: var(--bg3); border: 1px solid var(--border);
+  color: var(--text2); cursor: pointer; border-radius: 5px; font-size: 14px; padding: 0;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: all .15s;
+}
+.cp-eyedropper:hover { background: var(--bg4); color: var(--text); border-color: var(--border2); }
+.cp-eyedropper.active { background: var(--yellow); border-color: var(--yellow); color: #000; }
+/* canvas eyedropper cursor overlay */
+#eyedropper-overlay {
+  position: fixed; inset: 0; z-index: 300; cursor: crosshair; display: none;
+}
+#eyedropper-overlay.active { display: block; }
+#eyedropper-preview {
+  position: fixed; pointer-events: none; display: none;
+  width: 56px; height: 56px; border-radius: 50%;
+  border: 3px solid #fff; box-shadow: 0 2px 12px rgba(0,0,0,.6);
+  transform: translate(-50%, -130%);
+}
+#eyedropper-label {
+  position: fixed; pointer-events: none; display: none;
+  background: var(--bg2); border: 1px solid var(--border2); border-radius: 4px;
+  padding: 2px 6px; font-size: 10px; color: var(--text); font-family: monospace;
+  transform: translate(-50%, -220%); white-space: nowrap;
+}
 .cp-presets { display: flex; flex-wrap: wrap; gap: 4px; }
 .cp-preset {
   width: 18px; height: 18px; border-radius: 3px; cursor: pointer;
@@ -591,6 +615,9 @@ select.field-input { cursor: pointer; }
 </div>
 
 <div id="toast"></div>
+<div id="eyedropper-overlay"></div>
+<div id="eyedropper-preview"></div>
+<div id="eyedropper-label"></div>
 
 <script>
 // ─── STATE ───────────────────────────────────────────────────────────────────
@@ -1541,6 +1568,7 @@ function openColorPicker(figId, swatchEl) {
       <span class="cp-hex-label">#</span>
       <input class="cp-hex-input" id="cp-hex-input" maxlength="6" value="${rgbaToHex(fc.r,fc.g,fc.b).slice(1).toUpperCase()}"
         oninput="cpHexInput(this.value)">
+      <button class="cp-eyedropper" id="cp-eye-btn" onclick="startEyedropper()" title="Pick color from canvas">🖋</button>
     </div>
     <div class="cp-presets" id="cp-presets"></div>
   `;
@@ -1668,6 +1696,97 @@ function cpSetHex(hex6) {
 function cpHexInput(val) {
   val = val.replace(/[^0-9a-fA-F]/g,'');
   if (val.length===6) cpSetHex(val);
+}
+
+// ─── EYEDROPPER ───────────────────────────────────────────────────────────────
+let eyedropperActive = false;
+
+function startEyedropper() {
+  // Try native EyeDropper API first (Chrome 95+)
+  if (window.EyeDropper) {
+    const btn = document.getElementById('cp-eye-btn');
+    if (btn) btn.classList.add('active');
+    const ed = new EyeDropper();
+    ed.open().then(result => {
+      const hex = result.sRGBHex.slice(1);
+      cpSetHex(hex);
+      if (btn) btn.classList.remove('active');
+    }).catch(() => {
+      if (btn) btn.classList.remove('active');
+      // fallback to canvas picker
+      startCanvasEyedropper();
+    });
+    return;
+  }
+  // Fallback: pick from rendered canvas
+  startCanvasEyedropper();
+}
+
+function startCanvasEyedropper() {
+  eyedropperActive = true;
+  const btn = document.getElementById('cp-eye-btn');
+  if (btn) btn.classList.add('active');
+
+  const overlay = document.getElementById('eyedropper-overlay');
+  const preview = document.getElementById('eyedropper-preview');
+  const label   = document.getElementById('eyedropper-label');
+  overlay.classList.add('active');
+  preview.style.display = 'block';
+  label.style.display   = 'block';
+
+  // Render canvas to offscreen so we can sample pixel colors
+  // We sample from the main canvas which already has figures drawn
+  function onMove(e) {
+    const cx = e.clientX, cy = e.clientY;
+    preview.style.left = cx + 'px';
+    preview.style.top  = cy + 'px';
+    label.style.left   = cx + 'px';
+    label.style.top    = cy + 'px';
+
+    // get pixel from main canvas
+    const canvasRect = canvas.getBoundingClientRect();
+    const px = Math.round(cx - canvasRect.left);
+    const py = Math.round(cy - canvasRect.top);
+    if (px >= 0 && py >= 0 && px < canvas.width && py < canvas.height) {
+      const pixel = ctx.getImageData(px, py, 1, 1).data;
+      const hex = '#' + [pixel[0],pixel[1],pixel[2]].map(v=>v.toString(16).padStart(2,'0')).join('');
+      preview.style.background = hex;
+      label.textContent = hex.toUpperCase();
+      overlay._lastHex = hex;
+    } else {
+      preview.style.background = '#333';
+      label.textContent = '—';
+      overlay._lastHex = null;
+    }
+  }
+
+  function onClick(e) {
+    e.preventDefault();
+    cleanup();
+    if (overlay._lastHex) {
+      cpSetHex(overlay._lastHex.slice(1));
+    }
+  }
+
+  function onKey(e) {
+    if (e.key === 'Escape') cleanup();
+  }
+
+  function cleanup() {
+    eyedropperActive = false;
+    overlay.classList.remove('active');
+    preview.style.display = 'none';
+    label.style.display   = 'none';
+    const btn = document.getElementById('cp-eye-btn');
+    if (btn) btn.classList.remove('active');
+    overlay.removeEventListener('mousemove', onMove);
+    overlay.removeEventListener('click', onClick);
+    document.removeEventListener('keydown', onKey);
+  }
+
+  overlay.addEventListener('mousemove', onMove);
+  overlay.addEventListener('click', onClick);
+  document.addEventListener('keydown', onKey);
 }
 
 // ─── COLOR MATH ───────────────────────────────────────────────────────────────
