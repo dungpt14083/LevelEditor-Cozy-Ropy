@@ -60,8 +60,11 @@ body { background: var(--bg); color: var(--text); font-family: 'SF Mono', 'Fira 
 /* LEFT PANEL */
 #left-panel {
   width: var(--panel); background: var(--bg2); border-right: 1px solid var(--border);
-  display: flex; flex-direction: column; flex-shrink: 0; overflow: hidden;
+  display: flex; flex-direction: column; flex-shrink: 0; overflow-y: auto; overflow-x: hidden;
 }
+#left-panel::-webkit-scrollbar { width: 4px; }
+#left-panel::-webkit-scrollbar-track { background: transparent; }
+#left-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 .panel-section { border-bottom: 1px solid var(--border); }
 .panel-header {
   padding: 8px 12px; font-size: 10px; color: var(--text3); letter-spacing: .5px;
@@ -504,7 +507,7 @@ select.field-input { cursor: pointer; }
       <div id="validate-list"></div>
     </div>
 
-    <div class="panel-section" style="border-bottom:none;flex:1;overflow:hidden;display:flex;flex-direction:column">
+    <div class="panel-section" style="border-bottom:none">
       <div class="panel-header">Order Legend</div>
       <div id="order-legend"></div>
     </div>
@@ -1238,6 +1241,7 @@ document.addEventListener('keydown', e => {
   if (e.key==='f'||e.key==='F') setTool('figure');
   if (e.key==='g'||e.key==='G') setTool('move');
   if (e.key==='x'||e.key==='X') deleteSelected();
+  if ((e.key==='i'||e.key==='I') && selectedFig) { activateEyedropperShortcut(); return; }
   if (e.key==='Enter' && tool==='figure') confirmFigure();
   if (e.key==='Escape') { cancelFigure(); selectedDot=null; selectedFig=null; renderInspector(); render(); }
 });
@@ -1516,6 +1520,7 @@ function updateFigProp(id,prop,val) {
 
 function updateFigColor(id, hex) {
   const f=figures.find(f=>f.Id===id); if (!f) return;
+  if (!cpColorSaved) { saveHistory(); cpColorSaved = true; }
   const r=parseInt(hex.slice(1,3),16)/255;
   const g=parseInt(hex.slice(3,5),16)/255;
   const b=parseInt(hex.slice(5,7),16)/255;
@@ -1534,6 +1539,7 @@ let cpFigId = null;
 let cpHue = 0;
 let cpSat = 1;
 let cpVal = 1;
+let cpColorSaved = false; // tracks whether history has been saved for current picker session
 let cpDraggingSpectrum = false;
 let cpDraggingHue = false;
 
@@ -1551,6 +1557,7 @@ function openColorPicker(figId, swatchEl) {
     existing.remove();
   }
   cpFigId = figId;
+  cpColorSaved = false; // reset per-session flag
   const f = figures.find(f=>f.Id===figId); if (!f) return;
   const fc = f.fillColor;
 
@@ -1700,6 +1707,27 @@ function cpHexInput(val) {
 
 // ─── EYEDROPPER ───────────────────────────────────────────────────────────────
 let eyedropperActive = false;
+let _eyedropperCleanup = null; // exposed so E-key can cancel
+
+function cancelEyedropper() {
+  if (_eyedropperCleanup) { _eyedropperCleanup(); }
+}
+
+// Shortcut: press E while a figure is selected → toggle eyedropper on/off
+function activateEyedropperShortcut() {
+  if (!selectedFig) return;
+  // If eyedropper is already running, cancel it
+  if (eyedropperActive) { cancelEyedropper(); return; }
+  // Open color picker for the selected figure if not already open
+  const existing = document.getElementById('color-popover');
+  if (!existing || cpFigId !== selectedFig.Id) {
+    const swatchBtn = document.querySelector('.color-swatch-btn');
+    if (swatchBtn) openColorPicker(selectedFig.Id, swatchBtn);
+    else return; // figure inspector not visible
+  }
+  // Small delay to ensure popover DOM is ready
+  setTimeout(startEyedropper, 30);
+}
 
 function startEyedropper() {
   // Try native EyeDropper API first (Chrome 95+)
@@ -1734,8 +1762,6 @@ function startCanvasEyedropper() {
   preview.style.display = 'block';
   label.style.display   = 'block';
 
-  // Render canvas to offscreen so we can sample pixel colors
-  // We sample from the main canvas which already has figures drawn
   function onMove(e) {
     const cx = e.clientX, cy = e.clientY;
     preview.style.left = cx + 'px';
@@ -1769,11 +1795,12 @@ function startCanvasEyedropper() {
   }
 
   function onKey(e) {
-    if (e.key === 'Escape') cleanup();
+    if (e.key === 'Escape' || e.key === 'i' || e.key === 'I') cleanup();
   }
 
   function cleanup() {
     eyedropperActive = false;
+    _eyedropperCleanup = null;
     overlay.classList.remove('active');
     preview.style.display = 'none';
     label.style.display   = 'none';
@@ -1784,6 +1811,7 @@ function startCanvasEyedropper() {
     document.removeEventListener('keydown', onKey);
   }
 
+  _eyedropperCleanup = cleanup;
   overlay.addEventListener('mousemove', onMove);
   overlay.addEventListener('click', onClick);
   document.addEventListener('keydown', onKey);
